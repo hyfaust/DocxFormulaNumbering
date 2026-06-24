@@ -1,0 +1,25 @@
+# 项目依赖
+
+## 必需依赖
+
+```
+pywin32>=305
+```
+
+## 安装
+
+```bash
+pip install pywin32
+```
+
+## 系统要求
+
+- Windows 操作系统
+- Microsoft Word 2016 或更高版本
+- Python 3.6 或更高版本
+
+## 验证安装
+
+```bash
+python -c "import win32com.client; print('pywin32 安装成功')"
+```
