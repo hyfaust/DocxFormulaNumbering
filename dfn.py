@@ -1,33 +1,33 @@
 """
 dfn.py - DocxFormulaNumbering
 
-Word 文档公式自动编号工具
+Word Document Equation Numbering Tool
 
-功能:
-- 自动识别 Word 文档中的单行公式
-- 添加带章节号的编号格式 (1-1), (1-2), (2-1)...
-- 支持简单连续编号格式 (1), (2), (3)...
-- 创建书签用于交叉引用
-- 支持 eqArr 格式（美观的公式编号显示）
+Features:
+- Automatic detection of single-line formulas in Word documents
+- Chapter-based numbering format: (1-1), (1-2), (2-1)...
+- Simple sequential numbering format: (1), (2), (3)...
+- Bookmark creation for cross-referencing
+- eqArr format support (professional equation layout)
 
-用法:
-    python dfn.py <输入 docx> [输出 docx] [--simple] [--t1]
+Usage:
+    python dfn.py <input docx> [output docx] [--simple] [--t1]
 
-示例:
-    # 默认模式：章节号 - 序号格式
+Examples:
+    # Default mode: chapter-number format
     python dfn.py thesis.docx output.docx
-    
-    # 简单模式：连续编号
+
+    # Simple mode: sequential numbering
     python dfn.py thesis.docx output.docx --simple
-    
-    # eqArr 格式（需要 t1.docx 模板）
+
+    # eqArr format (requires t1.docx template)
     python dfn.py thesis.docx output.docx --t1
-    
-    # 覆盖原文件
+
+    # Overwrite original file
     python dfn.py document.docx
 
-作者：FaustSherpad
-版本：1.0.0
+Author: FaustSherpad
+Version: 1.0.0
 """
 
 import win32com.client
@@ -40,10 +40,10 @@ import tempfile
 import os
 
 
-# ==================== 工具函数 ====================
+# ==================== Utility Functions ====================
 
 def is_display_formula(para) -> bool:
-    """判断是否为单行公式（显示公式）"""
+    """Check if paragraph contains a single-line display formula"""
     if para.Range.OMaths.Count == 0:
         return False
 
@@ -62,7 +62,7 @@ def is_display_formula(para) -> bool:
 
 
 def get_chapter_number(para, word) -> int:
-    """使用 Word COM 接口获取当前段落所在章节的编号"""
+    """Get chapter number for current paragraph using Word COM"""
     try:
         original_range = word.Selection.Range.Duplicate
         para.Range.Select()
@@ -71,7 +71,7 @@ def get_chapter_number(para, word) -> int:
         temp_field = word.ActiveDocument.Fields.Add(
             Range=word.Selection.Range,
             Type=-1,
-            Text='STYLEREF "标题 1" \\n',
+            Text='STYLEREF "Heading 1" \\n',
             PreserveFormatting=False
         )
 
@@ -80,7 +80,7 @@ def get_chapter_number(para, word) -> int:
         temp_field.Delete()
         original_range.Select()
 
-        if chapter_text and ('错误' in chapter_text or 'Error' in chapter_text):
+        if chapter_text and ('Error' in chapter_text):
             return 0
 
         if chapter_text:
@@ -95,7 +95,7 @@ def get_chapter_number(para, word) -> int:
 
 
 def check_multilevel_list_configured(doc, word) -> bool:
-    """检查文档是否正确配置了多级列表"""
+    """Check if document has multi-level list configured"""
     try:
         original_range = word.Selection.Range.Duplicate
         doc.Range(0, 0).Select()
@@ -103,7 +103,7 @@ def check_multilevel_list_configured(doc, word) -> bool:
         temp_field = word.ActiveDocument.Fields.Add(
             Range=word.Selection.Range,
             Type=-1,
-            Text='STYLEREF "标题 1" \\n',
+            Text='STYLEREF "Heading 1" \\n',
             PreserveFormatting=False
         )
 
@@ -113,7 +113,7 @@ def check_multilevel_list_configured(doc, word) -> bool:
         original_range.Select()
 
         if chapter_text:
-            if '错误' in chapter_text or 'Error' in chapter_text:
+            if 'Error' in chapter_text:
                 pass
             else:
                 try:
@@ -125,7 +125,7 @@ def check_multilevel_list_configured(doc, word) -> bool:
         for para in doc.Paragraphs:
             try:
                 style_name = para.Style.NameLocal
-                if "标题 1" in style_name or "Heading 1" in style_name:
+                if "Heading 1" in style_name:
                     if para.Range.ListFormat.ListValue > 0:
                         return True
             except:
@@ -134,55 +134,55 @@ def check_multilevel_list_configured(doc, word) -> bool:
         return False
 
     except Exception as e:
-        print(f'检查多级列表配置失败：{e}')
+        print(f'Failed to check multi-level list configuration: {e}')
         return False
 
 
-# ==================== eqArr 模板处理 ====================
+# ==================== eqArr Template Processing ====================
 
 def extract_eqarr_template(template_path: str) -> dict:
     """
-    从 t1.docx 模板中提取 eqArr 结构
-    
-    返回:
-        dict: 包含模板各部分的字典
+    Extract eqArr structure from t1.docx template
+
+    Returns:
+        dict: Dictionary containing template components
     """
     with zipfile.ZipFile(template_path, 'r') as zip_ref:
         template_xml = zip_ref.read('word/document.xml').decode('utf-8')
-    
-    # 提取 oMathPara 模板
+
+    # Extract oMathPara template
     omath_para_match = re.search(
         r'(<m:oMathPara>.*?</m:oMathPara>)',
         template_xml,
         re.DOTALL
     )
-    
+
     if not omath_para_match:
-        raise ValueError("模板中未找到 oMathPara 元素")
-    
+        raise ValueError("oMathPara element not found in template")
+
     omath_template = omath_para_match.group(1)
-    
-    # 提取公式内容（# 前的部分）
+
+    # Extract formula content (before #)
     formula_match = re.search(r'<m:t[^>]*>([^#]*)#', omath_template, re.DOTALL)
     if not formula_match:
-        raise ValueError("模板中未找到公式内容")
-    
+        raise ValueError("Formula content not found in template")
+
     original_formula = formula_match.group(1).strip()
-    
-    # 提取编号
+
+    # Extract number
     number_match = re.search(r'<m:t>(\d+)</m:t>', omath_template)
     if not number_match:
-        raise ValueError("模板中未找到编号")
-    
+        raise ValueError("Formula number not found in template")
+
     original_number = number_match.group(1)
-    
-    # 提取 eqArr 环境的完整结构
+
+    # Extract eqArr environment structure
     eqarr_match = re.search(r'(<m:eqArr>.*?</m:eqArr>)', omath_template, re.DOTALL)
     if not eqarr_match:
-        raise ValueError("模板中未找到 eqArr 元素")
-    
+        raise ValueError("eqArr element not found in template")
+
     eqarr_template = eqarr_match.group(1)
-    
+
     return {
         'omath_para': omath_template,
         'eqarr': eqarr_template,
@@ -193,110 +193,110 @@ def extract_eqarr_template(template_path: str) -> dict:
 
 def create_eqarr_formula(template: dict, formula_text: str, number: str) -> str:
     """
-    使用模板创建 eqArr 格式的公式
-    
-    参数:
-        template: 从 extract_eqarr_template 返回的模板字典
-        formula_text: 公式内容
-        number: 编号
-    
-    返回:
-        str: eqArr 格式的 oMathPara XML
+    Create eqArr format formula using template
+
+    Args:
+        template: Template dictionary from extract_eqarr_template
+        formula_text: Formula content
+        number: Formula number
+
+    Returns:
+        str: eqArr format oMathPara XML
     """
-    # 从 eqarr 模板开始
+    # Start with eqarr template
     eqarr_xml = template['eqarr']
-    
-    # 替换公式内容
+
+    # Replace formula content
     eqarr_xml = eqarr_xml.replace(
         f'>{template["original_formula"]}#<',
         f'>{formula_text}#<'
     )
-    
-    # 替换编号（只替换第一个匹配的）
+
+    # Replace number (only first match)
     eqarr_xml = re.sub(
         r'<m:t>\d+</m:t>',
         f'<m:t>{number}</m:t>',
         eqarr_xml,
         count=1
     )
-    
-    # 构建完整的 oMathPara
+
+    # Build complete oMathPara
     omath_para = f'<m:oMathPara><m:oMath>{eqarr_xml}</m:oMath></m:oMathPara>'
-    
+
     return omath_para
 
 
 def extract_formula_text(omath_content: str) -> str:
     """
-    从 oMath 内容中提取纯文本公式
-    
-    将所有 <m:t> 元素的内容连接起来，直到遇到 # 分隔符
+    Extract plain text formula from oMath content
+
+    Concatenate all <m:t> element contents until # delimiter
     """
-    # 查找所有 m:t 元素
+    # Find all m:t elements
     texts = re.findall(r'<m:t[^>]*>([^<]*)</m:t>', omath_content)
-    
-    # 连接文本，直到遇到 #
+
+    # Concatenate text until #
     result = []
     for t in texts:
         if '#' in t:
-            # 找到#，提取#前的内容
+            # Found #, extract content before it
             idx = t.index('#')
             result.append(t[:idx])
             break
         else:
             result.append(t)
-    
+
     return ''.join(result).strip()
 
 
 def extract_formula_number(omath_content: str, simple_mode: bool = False) -> str:
     """
-    从 oMath 内容中提取公式编号
-    
-    参数:
-        omath_content: oMath 内容 XML
-        simple_mode: 简单模式（无章节号）
-    
-    返回:
-        str: 编号（简单模式返回纯数字，默认模式返回"章节 - 序号"格式）
+    Extract formula number from oMath content
+
+    Args:
+        omath_content: oMath content XML
+        simple_mode: Simple mode (no chapter numbers)
+
+    Returns:
+        str: Number (plain number in simple mode, "chapter-number" format in default mode)
     """
     chapter = None
     num = None
-    
-    # 查找书签名：eq{chap}_{num} 或 eq{num}
+
+    # Find bookmark name: eq{chap}_{num} or eq{num}
     bookmark_match = re.search(r'w:name="eq(\d+)_(\d+)"', omath_content)
     if bookmark_match:
         chapter = bookmark_match.group(1)
         num = bookmark_match.group(2)
     else:
-        # 尝试简单模式书签：eq{num}
+        # Try simple mode bookmark: eq{num}
         bookmark_simple_match = re.search(r'w:name="eq(\d+)"', omath_content)
         if bookmark_simple_match:
             num = bookmark_simple_match.group(1)
             chapter = None
-    
-    # 如果书签未找到，尝试从 SEQ 域提取
+
+    # If bookmark not found, try to extract from SEQ field
     if num is None:
-        # 查找 SEQ 域中的章节号：SEQ 式 \* ARABIC \s N
-        seq_chapter_match = re.search(r'SEQ\s+式\s+\\*\s*ARABIC\s+\\s\s+(\d+)', omath_content)
+        # Find chapter number in SEQ field: SEQ \\* ARABIC \\s N
+        seq_chapter_match = re.search(r'SEQ\s+\\*\s*ARABIC\s+\\s\s+(\d+)', omath_content)
         if seq_chapter_match:
             chapter = seq_chapter_match.group(1)
-        
-        # 查找域结果中的序号
-        # 在 SEQ 域之后查找第一个数字
-        seq_match = re.search(r'SEQ\s+式\s+\\*\s*ARABIC', omath_content)
+
+        # Find sequence number in field result
+        # Find first number after SEQ field
+        seq_match = re.search(r'SEQ\s+\\*\s*ARABIC', omath_content)
         if seq_match:
             seq_end = seq_match.end()
             after_seq = omath_content[seq_end:seq_end+200]
             num_match = re.search(r'<w:t[^>]*>(\d+)</w:t>', after_seq)
             if num_match:
                 num = num_match.group(1)
-    
-    # 如果仍然未找到，返回 None
+
+    # If still not found, return None
     if num is None:
         return None
-    
-    # 根据模式返回编号
+
+    # Return number based on mode
     if simple_mode or chapter is None:
         return num
     else:
@@ -305,87 +305,87 @@ def extract_formula_number(omath_content: str, simple_mode: bool = False) -> str
 
 def convert_formula_in_xml(xml_content: str, template: dict, simple_mode: bool = False) -> str:
     """
-    将 XML 中的公式从标准格式转换为 eqArr 格式
+    Convert formulas in XML from standard format to eqArr format
 
-    标准格式：<m:r><m:t>公式#</m:t></m:r>...域...<m:r><m:t>)</m:t></m:r>
-    eqArr 格式：<m:eqArr>...</m:eqArr>
-    
-    参数:
-        xml_content: XML 内容
-        template: 模板字典
-        simple_mode: 简单模式（无章节号）
+    Standard format: <m:r><m:t>formula#</m:t></m:r>...field...<m:r><m:t>)</m:t></m:r>
+    eqArr format: <m:eqArr>...</m:eqArr>
+
+    Args:
+        xml_content: XML content
+        template: Template dictionary
+        simple_mode: Simple mode (no chapter numbers)
     """
-    
-    # 查找所有 oMathPara 元素
+
+    # Find all oMathPara elements
     omath_paras = re.findall(r'(<m:oMathPara>.*?</m:oMathPara>)', xml_content, re.DOTALL)
-    
-    print(f"找到 {len(omath_paras)} 个 oMathPara 元素")
-    
+
+    print(f"Found {len(omath_paras)} oMathPara element(s)")
+
     for i, para in enumerate(omath_paras):
-        # 检查是否已经包含 eqArr
+        # Check if already contains eqArr
         if '<m:eqArr>' in para:
-            print(f"  oMathPara {i}: 已包含 eqArr，跳过")
+            print(f"  oMathPara {i}: Already contains eqArr, skipping")
             continue
-        
-        # 提取公式内容
+
+        # Extract formula content
         formula_text = extract_formula_text(para)
         if not formula_text:
-            print(f"  oMathPara {i}: 未找到公式内容，跳过")
+            print(f"  oMathPara {i}: Formula content not found, skipping")
             continue
-        
-        # 提取编号
+
+        # Extract number
         number = extract_formula_number(para, simple_mode)
         if not number:
-            print(f"  oMathPara {i}: 未找到编号，跳过")
+            print(f"  oMathPara {i}: Formula number not found, skipping")
             continue
-        
-        print(f"  oMathPara {i}: 公式='{formula_text}', 编号={number}")
-        
-        # 创建 eqArr 格式
+
+        print(f"  oMathPara {i}: Formula='{formula_text}', Number={number}")
+
+        # Create eqArr format
         eqarr_xml = create_eqarr_formula(template, formula_text, number)
-        
-        # 替换原 XML 中的 oMathPara
+
+        # Replace oMathPara in original XML
         xml_content = xml_content.replace(para, eqarr_xml, 1)
-    
+
     return xml_content
 
 
 def postprocess_eqarr_format(docx_path: str, template_path: str, output_path: str = None, simple_mode: bool = False) -> bool:
     """
-    后处理：将 docx 文件中的公式转换为 eqArr 格式
+    Post-process: Convert formulas in docx file to eqArr format
 
-    参数:
-        docx_path: 已编号的 docx 文件路径
-        template_path: t1.docx 模板路径
-        output_path: 输出路径（如果为 None，则覆盖原文件）
-        simple_mode: 简单模式（无章节号）
+    Args:
+        docx_path: Path to numbered docx file
+        template_path: Path to t1.docx template
+        output_path: Output path (None to overwrite)
+        simple_mode: Simple mode (no chapter numbers)
 
-    返回:
-        bool: 是否成功
+    Returns:
+        bool: Success status
     """
     if output_path is None:
         output_path = docx_path
 
     try:
-        # 提取模板
+        # Extract template
         template = extract_eqarr_template(template_path)
-        print(f"模板提取成功：公式='{template['original_formula']}', 编号='{template['original_number']}'")
+        print(f"Template extracted: Formula='{template['original_formula']}', Number='{template['original_number']}'")
 
-        # 读取文档 XML
+        # Read document XML
         with zipfile.ZipFile(docx_path, 'r') as zip_ref:
             xml_content = zip_ref.read('word/document.xml').decode('utf-8')
 
-        # 转换公式
-        print("正在转换公式格式...")
+        # Convert formulas
+        print("Converting formula format...")
         new_xml = convert_formula_in_xml(xml_content, template, simple_mode)
 
-        # 检查是否有转换
+        # Check if conversion occurred
         if new_xml == xml_content:
-            print("警告：未检测到需要转换的公式")
+            print("Warning: No formulas detected for conversion")
         else:
-            print("公式格式转换完成")
+            print("Formula format conversion completed")
 
-        # 写入输出文件
+        # Write to output file
         with zipfile.ZipFile(output_path, 'w') as zip_out:
             for item in zipfile.ZipFile(docx_path, 'r').infolist():
                 if item.filename == 'word/document.xml':
@@ -393,33 +393,33 @@ def postprocess_eqarr_format(docx_path: str, template_path: str, output_path: st
                 else:
                     zip_out.writestr(item, zipfile.ZipFile(docx_path, 'r').read(item.filename))
 
-        # 验证
+        # Verify
         with zipfile.ZipFile(output_path, 'r') as zip_ref:
             new_xml_check = zip_ref.read('word/document.xml').decode('utf-8')
             has_eqarr = '<m:eqArr>' in new_xml_check
             has_delim = '<m:d>' in new_xml_check
-            print(f"验证结果：eqArr={has_eqarr}, m:d={has_delim}")
+            print(f"Verification: eqArr={has_eqarr}, m:d={has_delim}")
 
         return True
-        
+
     except Exception as e:
-        print(f"后处理失败：{e}")
+        print(f"Post-processing failed: {e}")
         import traceback
         traceback.print_exc()
         return False
 
 
-# ==================== 主处理函数 ====================
+# ==================== Main Processing Function ====================
 
 def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: bool = False, use_eqarr: bool = False):
     """
-    为 Word 文档中的单行公式添加编号和书签
+    Add equation numbers and bookmarks to Word document formulas
 
-    参数:
-        doc_path: 输入文档路径
-        output_path: 输出文档路径
-        simple_mode: 简单模式（连续编号，不含章节号）
-        use_eqarr: 使用 eqArr 格式（t1 格式）
+    Args:
+        doc_path: Input document path
+        output_path: Output document path
+        simple_mode: Simple mode (sequential numbering without chapter numbers)
+        use_eqarr: Use eqArr format (t1 format)
     """
     if output_path is None:
         output_path = doc_path
@@ -427,7 +427,7 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
     word = None
     doc = None
     temp_file = None
-    
+
     try:
         word = win32com.client.Dispatch('Word.Application')
         word.Visible = False
@@ -435,22 +435,22 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
 
         doc = word.Documents.Open(str(doc_path))
 
-        # 如果不是简单模式，检查文档是否配置了多级列表
+        # If not simple mode, check if document has multi-level list configured
         if not simple_mode:
-            print('检查文档多级列表配置...')
+            print('Checking multi-level list configuration...')
             if not check_multilevel_list_configured(doc, word):
                 doc.Close(SaveChanges=False)
                 raise ValueError(
-                    '文档未配置多级列表！\n\n'
-                    '解决方法:\n'
-                    '1. 为章节标题应用 "标题 1" 样式\n'
-                    '2. 使用 "开始" → "段落" → "多级列表" 应用编号格式\n'
-                    '3. 重新运行此脚本\n\n'
-                    '或者使用 --simple 参数跳过章节号检查'
+                    'Document not configured for multi-level list!\n\n'
+                    'Solution:\n'
+                    '1. Apply "Heading 1" style to chapter headings\n'
+                    '2. Apply numbering via Home > Paragraph > Multilevel List\n'
+                    '3. Re-run this script\n\n'
+                    'Or use --simple parameter to skip chapter number check'
                 )
-            print('多级列表配置检查通过')
+            print('Multi-level list configuration verified')
 
-        # 统计章节和公式
+        # Count chapters and formulas
         chapter = 0
         formula_paras = []
         formula_count = 0
@@ -462,7 +462,7 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
             is_heading = False
             try:
                 style_name = para.Style.NameLocal
-                if "标题 1" in style_name or "Heading 1" in style_name:
+                if "Heading 1" in style_name:
                     is_heading = True
             except:
                 pass
@@ -487,17 +487,17 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
         if chapter == 0 and not simple_mode:
             doc.Close(SaveChanges=False)
             raise ValueError(
-                '文档未配置多级列表！\n\n'
-                '解决方法:\n'
-                '1. 为章节标题应用 "标题 1" 样式\n'
-                '2. 使用 "开始" → "段落" → "多级列表" 应用编号格式\n'
-                '3. 重新运行此脚本\n\n'
-                '或者使用 --simple 参数跳过章节号检查'
+                'Document not configured for multi-level list!\n\n'
+                'Solution:\n'
+                '1. Apply "Heading 1" style to chapter headings\n'
+                '2. Apply numbering via Home > Paragraph > Multilevel List\n'
+                '3. Re-run this script\n\n'
+                'Or use --simple parameter to skip chapter number check'
             )
 
-        print(f'\n找到 {len(formula_paras)} 个单行公式')
+        print(f'\nFound {len(formula_paras)} single-line formula(s)')
 
-        # 从后往前处理
+        # Process from back to front
         processed_count = 0
         for para_idx, chap, num, global_num in reversed(formula_paras):
             para = doc.Paragraphs(para_idx + 1)
@@ -507,17 +507,17 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
                 formula.Range.Select()
                 word.Selection.Collapse(0)
 
-                # 1. 添加 # 分隔符
+                # 1. Add # delimiter
                 word.Selection.TypeText('#')
                 word.Selection.Collapse(0)
 
-                # 2. 添加左括号
+                # 2. Add left parenthesis
                 word.Selection.TypeText('(')
                 start_pos = word.Selection.End
                 word.Selection.Collapse(0)
 
                 if simple_mode:
-                    field_code = 'SEQ 式 \\* ARABIC'
+                    field_code = 'SEQ Equation \\* ARABIC'
                     field = doc.Fields.Add(
                         Range=word.Selection.Range,
                         Type=-1,
@@ -530,7 +530,7 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
                     field1 = doc.Fields.Add(
                         Range=word.Selection.Range,
                         Type=-1,
-                        Text='STYLEREF "标题 1" \\n',
+                        Text='STYLEREF "Heading 1" \\n',
                         PreserveFormatting=False
                     )
                     field1.Select()
@@ -539,7 +539,7 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
                     word.Selection.TypeText('-')
                     word.Selection.Collapse(0)
 
-                    field_code = f'SEQ 式 \\* ARABIC \\s {chap}'
+                    field_code = f'SEQ Equation \\* ARABIC \\s {chap}'
                     field2 = doc.Fields.Add(
                         Range=word.Selection.Range,
                         Type=-1,
@@ -549,11 +549,11 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
                     field2.Select()
                     word.Selection.MoveRight(Unit=2, Count=1)
 
-                # 3. 添加右括号
+                # 3. Add right parenthesis
                 end_pos = word.Selection.Start
                 word.Selection.TypeText(')')
 
-                # 4. 创建书签
+                # 4. Create bookmark
                 bookmark_range = doc.Range(start_pos, end_pos)
                 if simple_mode:
                     bookmark_name = f'eq{global_num}'
@@ -561,35 +561,35 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
                     bookmark_name = f'eq{chap}_{num}'
                 doc.Bookmarks.Add(Name=bookmark_name, Range=bookmark_range)
 
-                print(f'  段落 {para_idx}: 书签 {bookmark_name}')
+                print(f'  Paragraph {para_idx}: Bookmark {bookmark_name}')
                 processed_count += 1
 
             except Exception as e:
-                print(f'段落 {para_idx} 处理失败：{e}')
+                print(f'Failed to process paragraph {para_idx}: {e}')
 
-        print(f'\n处理完成，共处理 {processed_count} 个公式')
+        print(f'\nProcessing completed, {processed_count} formula(s) processed')
 
-        # 更新所有域
+        # Update all fields
         doc.Fields.Update()
 
-        # 如果启用 eqarr 格式，先保存到临时文件
+        # If eqarr format enabled, save to temp file first
         if use_eqarr:
             template_path = Path(doc_path).parent / "t1.docx"
             if not template_path.exists():
-                print(f"\n警告：未找到模板文件 {template_path}")
-                print("将使用标准格式保存")
+                print(f"\nWarning: Template file not found: {template_path}")
+                print("Using standard format")
                 use_eqarr = False
             else:
-                # 保存到临时文件
+                # Save to temp file
                 temp_dir = tempfile.mkdtemp()
                 temp_file = os.path.join(temp_dir, "temp_numbered.docx")
                 doc.SaveAs2(temp_file)
                 doc.Close()
-                
-                print(f"\n正在进行 eqArr 格式转换...")
+
+                print(f"\nConverting to eqArr format...")
                 if postprocess_eqarr_format(temp_file, str(template_path), str(output_path), simple_mode):
-                    print(f"eqArr 格式转换完成：{output_path}")
-                    # 清理临时文件
+                    print(f"eqArr format conversion completed: {output_path}")
+                    # Clean up temp files
                     try:
                         os.remove(temp_file)
                         os.rmdir(temp_dir)
@@ -597,8 +597,8 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
                         pass
                     return 0
                 else:
-                    print("eqArr 转换失败，使用标准格式")
-                    # 回退到标准格式
+                    print("eqArr conversion failed, using standard format")
+                    # Fallback to standard format
                     doc = word.Documents.Open(temp_file)
                     try:
                         os.remove(temp_file)
@@ -606,15 +606,15 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
                     except:
                         pass
 
-        # 标准格式保存
+        # Save in standard format
         if Path(output_path).exists():
             Path(output_path).unlink()
 
         doc.SaveAs2(str(output_path))
-        print(f'已保存到：{output_path}')
+        print(f'Saved to: {output_path}')
 
-        # 验证书签
-        print(f'\n验证书签:')
+        # Verify bookmarks
+        print(f'\nVerifying bookmarks:')
         for bm in doc.Bookmarks:
             if bm.Name.startswith('eq'):
                 print(f'  - {bm.Name}')
@@ -623,10 +623,10 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
         return 0
 
     except ValueError as e:
-        print(f'\n❌ 错误：{e}')
+        print(f'\nError: {e}')
         return 1
     except Exception as e:
-        print(f'\n❌ 未知错误：{e}')
+        print(f'\nUnexpected error: {e}')
         import traceback
         traceback.print_exc()
         return 1
@@ -646,40 +646,40 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
 
 def main():
     parser = argparse.ArgumentParser(
-        description='DFN - DocxFormulaNumbering | Word 文档公式自动编号工具',
+        description='DFN - DocxFormulaNumbering | Word Document Equation Numbering Tool',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
-示例:
-  # 默认模式：使用章节号 - 序号格式 (1-1), (1-2), (2-1)...
+Examples:
+  # Default mode: chapter-number format (1-1), (1-2), (2-1)...
   python dfn.py input.docx output.docx
 
-  # 简单模式：使用连续编号格式 (1), (2), (3)...
+  # Simple mode: sequential numbering (1), (2), (3)...
   python dfn.py input.docx output.docx --simple
 
-  # 使用 t1 格式（eqArr 环境，需要 t1.docx 模板）
+  # Use t1 format (eqArr environment, requires t1.docx template)
   python dfn.py input.docx output.docx --t1
 
-  # 覆盖原文件
+  # Overwrite original file
   python dfn.py document.docx
 
-格式说明:
-  默认/t2 格式：<m:t>E=mc²#(1)</m:t> - 编号为普通文本
-  t1 格式：<m:eqArr><m:t>E=mc²#</m:t><m:d>1</m:d></m:eqArr> - 编号在 delimiter 元素中
+Format Description:
+  Default/t2 format: <m:t>E=mc^2#(1)</m:t> - Number as plain text
+  t1 format: <m:eqArr><m:t>E=mc^2#</m:t><m:d>1</m:d></m:eqArr> - Number in delimiter element
 
-  t1 格式需要 t1.docx 作为模板文件
+  t1 format requires t1.docx template file
 
-前提条件:
-  默认模式下，文档需要配置多级列表：
-  1. 章节标题使用"标题 1"样式
-  2. 通过"开始"→"段落"→"多级列表"应用编号
-  3. 标题样式与多级列表级别关联
+Prerequisites:
+  In default mode, document must have multi-level list configured:
+  1. Chapter headings use "Heading 1" style
+  2. Apply numbering via Home > Paragraph > Multilevel List
+  3. Heading style linked to list level
         '''
     )
 
-    parser.add_argument('input', help='输入 docx 文件路径')
-    parser.add_argument('output', nargs='?', default=None, help='输出 docx 文件路径 (可选，默认覆盖原文件)')
-    parser.add_argument('--simple', action='store_true', help='使用简单连续编号模式 (不含章节号)')
-    parser.add_argument('--t1', action='store_true', help='使用 t1 格式（eqArr 环境，需要 t1.docx 模板）')
+    parser.add_argument('input', help='Input docx file path')
+    parser.add_argument('output', nargs='?', default=None, help='Output docx file path (optional, overwrites input by default)')
+    parser.add_argument('--simple', action='store_true', help='Use simple sequential numbering mode (no chapter numbers)')
+    parser.add_argument('--t1', action='store_true', help='Use t1 format (eqArr environment, requires t1.docx template)')
 
     args = parser.parse_args()
 
@@ -687,7 +687,7 @@ def main():
     output_path = Path(args.output).resolve() if args.output else None
 
     if not input_path.exists():
-        print(f'错误：文件不存在 - {input_path}')
+        print(f'Error: File not found - {input_path}')
         return 1
 
     return add_formula_numbering(
