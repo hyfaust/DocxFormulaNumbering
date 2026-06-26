@@ -191,13 +191,13 @@ def extract_eqarr_template(template_path: str) -> dict:
     }
 
 
-def create_eqarr_formula(template: dict, formula_text: str, number: str) -> str:
+def create_eqarr_formula(template: dict, formula_omml: str, number: str) -> str:
     """
-    Create eqArr format formula using template
+    Create eqArr format formula using template with preserved OMML structure
 
     Args:
         template: Template dictionary from extract_eqarr_template
-        formula_text: Formula content
+        formula_omml: Formula OMML structure (not plain text) - complete XML structure
         number: Formula number
 
     Returns:
@@ -206,24 +206,129 @@ def create_eqarr_formula(template: dict, formula_text: str, number: str) -> str:
     # Start with eqarr template
     eqarr_xml = template['eqarr']
 
-    # Replace formula content
-    eqarr_xml = eqarr_xml.replace(
-        f'>{template["original_formula"]}#<',
-        f'>{formula_text}#<'
-    )
+    # Template structure:
+    # <m:eqArr>
+    #   <m:e>
+    #     <m:r><m:t>original_formula#</m:t></m:r>
+    #     <m:d>  <- Number delimiter (INSIDE <m:e>, at the END)
+    #       <m:e><m:r><m:t>1</m:t></m:r></m:e>
+    #     </m:d>
+    #   </m:e>
+    # </m:eqArr>
 
-    # Replace number (only first match)
-    eqarr_xml = re.sub(
-        r'<m:t>\d+</m:t>',
-        f'<m:t>{number}</m:t>',
-        eqarr_xml,
-        count=1
-    )
+    # formula_omml structure (extracted from numbered formula):
+    # <m:r><m:t>E = m</m:t></m:r><m:sSup>...</m:sSup>
+    # (multiple m:r and other elements possible)
+
+    # Strategy:
+    # 1. Find the <m:d> element (number delimiter) - keep it as-is but update number
+    # 2. Find all content before <m:d> inside <m:e> - this is the formula area to replace
+    # 3. Replace formula area with formula_omml + <m:r><m:t>#</m:t></m:r>
+
+    # Find the <m:d> element
+    d_match = re.search(r'<m:d>.*?</m:d>', eqarr_xml, re.DOTALL)
+    if not d_match:
+        # Fallback: just replace number
+        eqarr_xml = re.sub(r'<m:t>\d+</m:t>', f'<m:t>{number}</m:t>', eqarr_xml, count=1)
+        return f'<m:oMathPara><m:oMath>{eqarr_xml}</m:oMath></m:oMathPara>'
+
+    d_start = d_match.start()
+    d_end = d_match.end()
+    d_element = d_match.group(0)
+
+    # Content before <m:d> is the formula area
+    before_d = eqarr_xml[:d_start]
+    after_d = eqarr_xml[d_end:]
+
+    # In before_d, find the <m:e> start tag
+    # The structure is: <m:eqArr>...<m:e>...formula...</m:e>...<m:d>
+    # But wait, <m:d> is INSIDE <m:e>, so before_d contains: <m:eqArr>...<m:e>...formula...
+
+    # Find the last <m:e> in before_d
+    e_start = before_d.rfind('<m:e>')
+    if e_start == -1:
+        # Fallback
+        return f'<m:oMathPara><m:oMath>{eqarr_xml}</m:oMath></m:oMathPara>'
+
+    # Find the end of <m:e> start tag
+    e_tag_end = before_d.find('>', e_start) + 1
+
+    # Content before <m:e> tag (including the tag itself)
+    before_e_content = before_d[:e_tag_end]
+
+    # Build new formula content: formula_omml + # marker
+    new_formula = formula_omml.strip() + '<m:r><m:t>#</m:t></m:r>'
+
+    # Update number in <m:d> element
+    updated_d = re.sub(r'<m:t>\d+</m:t>', f'<m:t>{number}</m:t>', d_element, count=1)
+
+    # Build new eqarr XML
+    new_eqarr = before_e_content + new_formula + updated_d + after_d
 
     # Build complete oMathPara
-    omath_para = f'<m:oMathPara><m:oMath>{eqarr_xml}</m:oMath></m:oMathPara>'
+    omath_para = f'<m:oMathPara><m:oMath>{new_eqarr}</m:oMath></m:oMathPara>'
 
     return omath_para
+
+
+def extract_formula_omml(omath_content: str) -> str:
+    """
+    Extract complete OMML structure from oMathPara content before # delimiter
+
+    Returns the formula elements inside m:oMath, preserving all structure
+    like m:sSup, m:sSub, m:f, etc. Does not include outer m:oMathPara/m:oMath tags.
+
+    Args:
+        omath_content: oMathPara content containing formula with # delimiter
+
+    Returns:
+        str: Formula elements (m:r, m:sSup, etc.) without outer wrappers
+    """
+    # First, extract content inside <m:oMath>...</m:oMath>
+    omath_match = re.search(r'<m:oMath>(.*?)</m:oMath>', omath_content, re.DOTALL)
+    if not omath_match:
+        # Fallback: use content as-is
+        omath_inner = omath_content
+    else:
+        omath_inner = omath_match.group(1)
+
+    # Find # delimiter position
+    hash_pos = omath_inner.find('#')
+    if hash_pos == -1:
+        # No # found, return inner content as-is
+        return omath_inner.strip()
+
+    # Strategy: Find all XML elements before # and ensure they are properly closed
+    # We need to count open and close tags to ensure balanced XML
+
+    # Find the last </m:t> before #
+    before_hash = omath_inner[:hash_pos]
+    last_close_pos = before_hash.rfind('</m:t>')
+    if last_close_pos == -1:
+        # Fallback: just return everything before #
+        return before_hash
+
+    # Extract up to and including the last </m:t>
+    partial_xml = omath_inner[:last_close_pos + 6]  # +6 for '</m:t>'
+
+    # Now we need to close any open tags
+    # Count open vs close tags for m:r, m:sup, m:sSup, m:sSub, m:e, etc.
+    # Order matters: we need to close innermost tags first
+    # The partial_xml ends with </m:t>, so we need to close tags in the order they were opened
+    # e.g., if we have <m:sSup><m:e><m:r><m:t>2</m:t>, we need to close </m:r></m:e></m:sSup>
+    tags_to_check = ['m:r', 'm:sup', 'm:sSup', 'm:sSub', 'm:e', 'm:d', 'm:f', 'm:num', 'm:den', 'm:rad']
+
+    # Simple approach: count occurrences
+    close_tags = []
+    for tag in tags_to_check:  # Forward order: m:r first, then m:sup, then m:sSup
+        open_count = len(re.findall(rf'<{tag}(?:\s[^>]*)?>', partial_xml))
+        close_count = len(re.findall(rf'</{tag}>', partial_xml))
+        # Add missing close tags
+        for _ in range(open_count - close_count):
+            close_tags.append(f'</{tag}>')
+
+    # Append close tags
+    return partial_xml.strip() + ''.join(close_tags)
 
 
 def extract_formula_text(omath_content: str) -> str:
@@ -327,11 +432,14 @@ def convert_formula_in_xml(xml_content: str, template: dict, simple_mode: bool =
             print(f"  oMathPara {i}: Already contains eqArr, skipping")
             continue
 
-        # Extract formula content
-        formula_text = extract_formula_text(para)
-        if not formula_text:
+        # Extract formula content with preserved OMML structure
+        formula_omml = extract_formula_omml(para)
+        if not formula_omml:
             print(f"  oMathPara {i}: Formula content not found, skipping")
             continue
+
+        # Also extract plain text for logging
+        formula_text = extract_formula_text(para)
 
         # Extract number
         number = extract_formula_number(para, simple_mode)
@@ -341,8 +449,8 @@ def convert_formula_in_xml(xml_content: str, template: dict, simple_mode: bool =
 
         print(f"  oMathPara {i}: Formula='{formula_text}', Number={number}")
 
-        # Create eqArr format
-        eqarr_xml = create_eqarr_formula(template, formula_text, number)
+        # Create eqArr format with preserved OMML structure
+        eqarr_xml = create_eqarr_formula(template, formula_omml, number)
 
         # Replace oMathPara in original XML
         xml_content = xml_content.replace(para, eqarr_xml, 1)
