@@ -249,39 +249,66 @@ def extract_formula_omml(omath_content: str) -> str:
     Returns:
         str: Formula elements (m:r, m:sSup, etc.) without outer wrappers
     """
-    # First, extract content inside <m:oMath>...</m:oMath>
-    omath_match = re.search(r'<m:oMath>(.*?)</m:oMath>', omath_content, re.DOTALL)
-    if not omath_match:
-        omath_inner = omath_content
-    else:
-        omath_inner = omath_match.group(1)
-
     # Find # delimiter position
-    hash_pos = omath_inner.find('#')
+    hash_pos = omath_content.find('#')
     if hash_pos == -1:
-        return omath_inner.strip()
+        return omath_content.strip()
 
-    # Find the last </m:t> before #
-    before_hash = omath_inner[:hash_pos]
-    last_close_pos = before_hash.rfind('</m:t>')
-    if last_close_pos == -1:
-        return before_hash
+    # Get everything before # (not including #)
+    before_hash = omath_content[:hash_pos]
 
-    # Extract up to and including the last </m:t>
-    partial_xml = omath_inner[:last_close_pos + 6]
+    # Find the last </m:t> before # - this is the end of formula text
+    last_m_t_close = before_hash.rfind('</m:t>')
+    if last_m_t_close == -1:
+        return before_hash.strip()
+
+    # Include the </m:t>
+    partial = before_hash[:last_m_t_close + 6]
 
     # Close any open tags to ensure balanced XML
-    # Order matters: close innermost tags first
-    tags_to_check = ['m:r', 'm:sup', 'm:sSup', 'm:sSub', 'm:e', 'm:d', 'm:f', 'm:num', 'm:den', 'm:rad']
+    # Build a stack of open tags and close them in reverse order
+    tag_stack = []
+    pos = 0
 
-    close_tags = []
-    for tag in tags_to_check:
-        open_count = len(re.findall(rf'<{tag}(?:\s[^>]*)?>', partial_xml))
-        close_count = len(re.findall(rf'</{tag}>', partial_xml))
-        for _ in range(open_count - close_count):
-            close_tags.append(f'</{tag}>')
+    while pos < len(partial):
+        next_open = partial.find('<', pos)
+        if next_open == -1:
+            break
 
-    return partial_xml.strip() + ''.join(close_tags)
+        if partial[next_open:next_open+2] == '</':
+            close_end = partial.find('>', next_open)
+            if close_end != -1:
+                tag_name = partial[next_open+2:close_end]
+                if tag_stack and tag_stack[-1] == tag_name:
+                    tag_stack.pop()
+                pos = close_end + 1
+            else:
+                break
+        elif partial[next_open] == '<':
+            tag_end = partial.find('>', next_open)
+            if tag_end == -1:
+                break
+
+            tag_content = partial[next_open:tag_end+1]
+
+            # Skip self-closing tags
+            if tag_content.endswith('/>'):
+                pos = tag_end + 1
+                continue
+
+            tag_match = re.match(r'<([\w:]+)', tag_content)
+            if tag_match:
+                tag_name = tag_match.group(1)
+                tag_stack.append(tag_name)
+
+            pos = tag_end + 1
+        else:
+            pos = next_open + 1
+
+    # Build closing tags in reverse order
+    close_tags = [f'</{tag}>' for tag in reversed(tag_stack)]
+
+    return partial.strip() + ''.join(close_tags)
 
 
 def create_eqarr_formula(template: dict, formula_omml: str, number: str) -> str:
@@ -421,7 +448,9 @@ def convert_formula_in_xml(xml_content: str, template: dict, simple_mode: bool =
         template: Template dictionary
         simple_mode: Simple mode (no chapter numbers)
     """
-    omath_paras = re.findall(r'(<m:oMathPara>.*?</m:oMathPara>)', xml_content, re.DOTALL)
+    # Find oMathPara elements using regex
+    # Note: This uses non-greedy matching which works for most cases
+    omath_paras = re.findall(r'(<m:oMathPara[^>]*>.*?</m:oMathPara>)', xml_content, re.DOTALL)
 
     print(f"Found {len(omath_paras)} oMathPara element(s)")
 
@@ -445,13 +474,20 @@ def convert_formula_in_xml(xml_content: str, template: dict, simple_mode: bool =
             print(f"  oMathPara {i}: Formula number not found, skipping")
             continue
 
-        print(f"  oMathPara {i}: Formula='{formula_text}', Number={number}")
+        # Encode formula text to avoid Unicode errors on Windows console
+        formula_text_safe = formula_text.encode('utf-8', errors='replace').decode('utf-8')
+        print(f"  oMathPara {i}: Formula='{formula_text_safe}', Number={number}")
 
         # Create eqArr format with preserved OMML structure
         eqarr_xml = create_eqarr_formula(template, formula_omml, number)
 
-        # Replace oMathPara in original XML
-        xml_content = xml_content.replace(para, eqarr_xml, 1)
+        # Replace oMathPara in original XML - need to match the exact string
+        # Find this specific oMathPara in the original XML
+        idx = xml_content.find(para)
+        if idx != -1:
+            xml_content = xml_content[:idx] + eqarr_xml + xml_content[idx+len(para):]
+        else:
+            print(f"  Warning: Could not find oMathPara {i} in original XML, skipping")
 
     return xml_content
 
@@ -474,7 +510,9 @@ def postprocess_eqarr_format(docx_path: str, template_path: str, output_path: st
 
     try:
         template = extract_eqarr_template(template_path)
-        print(f"Template extracted: Formula='{template['original_formula']}', Number='{template['original_number']}'")
+        # Encode to avoid Unicode errors on Windows console
+        orig_formula_safe = template['original_formula'].encode('utf-8', errors='replace').decode('utf-8')
+        print(f"Template extracted: Formula='{orig_formula_safe}', Number='{template['original_number']}'")
 
         with zipfile.ZipFile(docx_path, 'r') as zip_ref:
             xml_content = zip_ref.read('word/document.xml').decode('utf-8')
@@ -503,7 +541,9 @@ def postprocess_eqarr_format(docx_path: str, template_path: str, output_path: st
         return True
 
     except Exception as e:
-        print(f"Post-processing failed: {e}")
+        # Encode error message to avoid Unicode errors
+        error_msg = str(e).encode('utf-8', errors='replace').decode('utf-8')
+        print(f"Post-processing failed: {error_msg}")
         import traceback
         traceback.print_exc()
         return False
