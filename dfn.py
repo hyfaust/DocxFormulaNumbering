@@ -241,21 +241,29 @@ def extract_formula_omml(omath_content: str) -> str:
     Extract complete OMML structure from oMathPara content before # delimiter
 
     Returns the formula elements inside m:oMath, preserving all structure
-    like m:sSup, m:sSub, m:f, etc. Does not include outer m:oMathPara/m:oMath tags.
+    like m:sSup, m:sSub, m:f, etc. Does NOT include outer m:oMathPara/m:oMath tags.
 
     Args:
         omath_content: oMathPara content containing formula with # delimiter
 
     Returns:
-        str: Formula elements (m:r, m:sSup, etc.) without outer wrappers
+        str: Formula elements (m:r, m:sSup, etc.) WITHOUT outer m:oMathPara/m:oMath wrappers
     """
+    # First, extract content inside <m:oMath>...</m:oMath>
+    omath_match = re.search(r'<m:oMath>(.*?)</m:oMath>', omath_content, re.DOTALL)
+    if not omath_match:
+        # If no oMath wrapper, use the whole content
+        omath_inner = omath_content
+    else:
+        omath_inner = omath_match.group(1)
+
     # Find # delimiter position
-    hash_pos = omath_content.find('#')
+    hash_pos = omath_inner.find('#')
     if hash_pos == -1:
-        return omath_content.strip()
+        return omath_inner.strip()
 
     # Get everything before # (not including #)
-    before_hash = omath_content[:hash_pos]
+    before_hash = omath_inner[:hash_pos]
 
     # Find the last </m:t> before # - this is the end of formula text
     last_m_t_close = before_hash.rfind('</m:t>')
