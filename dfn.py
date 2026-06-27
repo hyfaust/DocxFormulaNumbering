@@ -43,9 +43,45 @@ import sys
 
 # ==================== Utility Functions ====================
 
+def is_in_table(para) -> bool:
+    """Check if paragraph is inside a table cell"""
+    try:
+        # Method 1: Check parent object type
+        parent = para.Parent
+        if parent is not None:
+            # Check if parent is a Cell or Row (table elements)
+            parent_type = str(type(parent))
+            if 'Cell' in parent_type or 'Row' in parent_type:
+                return True
+    except:
+        pass
+    
+    try:
+        # Method 2: Check paragraph XML for table markers
+        para_xml = para.Range.XML
+        # w:tc = table cell, w:tr = table row, w:tbl = table
+        if '<w:tc>' in para_xml or '<w:tr>' in para_xml or '<w:tbl>' in para_xml:
+            return True
+    except:
+        pass
+    
+    try:
+        # Method 3: Use Word's InformationType (wdWithInTable = 12)
+        if para.Range.InformationType(12):
+            return True
+    except:
+        pass
+    
+    return False
+
+
 def is_display_formula(para) -> bool:
     """Check if paragraph contains a single-line display formula"""
     if para.Range.OMaths.Count == 0:
+        return False
+
+    # Skip formulas inside tables
+    if is_in_table(para):
         return False
 
     para_xml = para.Range.XML
