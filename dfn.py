@@ -454,9 +454,41 @@ def convert_formula_in_xml(xml_content: str, template: dict, simple_mode: bool =
 
     print(f"Found {len(omath_paras)} oMathPara element(s)")
 
+    # Build a map of oMathPara start positions to check if they're in tables
+    # An oMathPara is in a table if it's within <w:tbl>...</w:tbl>
+    def is_in_table(para_xml: str, full_xml: str, para_start_pos: int) -> bool:
+        """Check if oMathPara is inside a table by examining surrounding XML context"""
+        # Look backwards from para_start_pos to find enclosing tags
+        # If we find <w:tbl> before finding </w:tbl>, it's in a table
+        
+        # Search backwards for nearest table tags
+        before = full_xml[:para_start_pos]
+        
+        # Find last <w:tbl> and </w:tbl> before this position
+        last_tbl_open = before.rfind('<w:tbl')
+        last_tbl_close = before.rfind('</w:tbl>')
+        
+        # If last open is after last close, we're inside a table
+        if last_tbl_open > last_tbl_close:
+            return True
+        
+        return False
+
     for i, para in enumerate(omath_paras):
+        # Skip if already eqArr
         if '<m:eqArr>' in para:
             print(f"  oMathPara {i}: Already contains eqArr, skipping")
+            continue
+
+        # Find position in original XML to check if in table
+        idx = xml_content.find(para)
+        if idx == -1:
+            print(f"  oMathPara {i}: Could not find in original XML, skipping")
+            continue
+
+        # Check if this oMathPara is in a table
+        if is_in_table(para, xml_content, idx):
+            print(f"  oMathPara {i}: Inside table, skipping")
             continue
 
         # Extract formula content with preserved OMML structure
@@ -476,18 +508,22 @@ def convert_formula_in_xml(xml_content: str, template: dict, simple_mode: bool =
 
         # Encode formula text to avoid Unicode errors on Windows console
         formula_text_safe = formula_text.encode('utf-8', errors='replace').decode('utf-8')
-        print(f"  oMathPara {i}: Formula='{formula_text_safe}', Number={number}")
+        try:
+            print(f"  oMathPara {i}: Formula='{formula_text_safe}', Number={number}")
+        except UnicodeEncodeError as e:
+            print(f"  oMathPara {i}: Number={number} (formula text contains special chars)")
 
         # Create eqArr format with preserved OMML structure
-        eqarr_xml = create_eqarr_formula(template, formula_omml, number)
+        try:
+            eqarr_xml = create_eqarr_formula(template, formula_omml, number)
+        except Exception as e:
+            error_msg = str(e).encode('utf-8', errors='replace').decode('utf-8')
+            print(f"  oMathPara {i}: create_eqarr_formula failed: {error_msg}")
+            continue
 
         # Replace oMathPara in original XML - need to match the exact string
-        # Find this specific oMathPara in the original XML
-        idx = xml_content.find(para)
         if idx != -1:
             xml_content = xml_content[:idx] + eqarr_xml + xml_content[idx+len(para):]
-        else:
-            print(f"  Warning: Could not find oMathPara {i} in original XML, skipping")
 
     return xml_content
 
@@ -544,8 +580,13 @@ def postprocess_eqarr_format(docx_path: str, template_path: str, output_path: st
         # Encode error message to avoid Unicode errors
         error_msg = str(e).encode('utf-8', errors='replace').decode('utf-8')
         print(f"Post-processing failed: {error_msg}")
+        # Print traceback with encoding handling
         import traceback
-        traceback.print_exc()
+        tb_str = traceback.format_exc()
+        try:
+            print(tb_str.encode('utf-8', errors='replace').decode('utf-8'))
+        except:
+            print(tb_str)
         return False
 
 
