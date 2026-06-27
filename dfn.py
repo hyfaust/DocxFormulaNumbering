@@ -85,16 +85,24 @@ def is_display_formula(para) -> bool:
         return False
 
     para_xml = para.Range.XML
-    texts = []
-    for t in re.findall(r'<w:t[^>]*>(.*?)</w:t>', para_xml, re.DOTALL):
+    
+    # Check if paragraph contains only oMath (display formula)
+    # Remove all oMath content and check what's left
+    xml_without_omath = re.sub(r'<m:oMath[^>]*>.*?</m:oMath>', '', para_xml, flags=re.DOTALL)
+    
+    # Extract text from remaining w:t elements (non-formula text)
+    non_formula_texts = []
+    for t in re.findall(r'<w:t[^>]*>(.*?)</w:t>', xml_without_omath, re.DOTALL):
         if t.strip():
-            texts.append(t.strip())
-
-    visible_texts = [t for t in texts if '<m:' not in t and '</m:' not in t]
-    non_formula_text_len = sum(len(t) for t in visible_texts)
-    has_label = any(':' in t for t in visible_texts)
+            non_formula_texts.append(t.strip())
+    
+    non_formula_text_len = sum(len(t) for t in non_formula_texts)
+    has_label = any(':' in t for t in non_formula_texts)
+    
+    # Display formula: no or minimal non-formula text
+    # Inline formula: has significant non-formula text (>20 chars) or label with colon
     is_inline = non_formula_text_len > 20 or has_label
-
+    
     return not is_inline
 
 
@@ -566,8 +574,19 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
 
             if para.Range.OMaths.Count > 0:
                 if is_display_formula(para):
-                    para_xml = para.Range.XML
-                    if 'SEQ' not in para_xml and 'STYLEREF' not in para_xml:
+                    # Check if paragraph already has numbered fields using Word COM
+                    # Don't check XML string for 'SEQ' as it may appear in Base64 encoded content
+                    has_numbering = False
+                    try:
+                        for field in para.Range.Fields:
+                            field_code = field.Code.Text if field.Code else ""
+                            if 'SEQ' in field_code or 'STYLEREF' in field_code:
+                                has_numbering = True
+                                break
+                    except:
+                        pass
+                    
+                    if not has_numbering:
                         formula_count += 1
                         global_formula_count += 1
 
