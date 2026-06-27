@@ -38,6 +38,7 @@ import zipfile
 import shutil
 import tempfile
 import os
+import sys
 
 
 # ==================== Utility Functions ====================
@@ -71,7 +72,7 @@ def get_chapter_number(para, word) -> int:
         temp_field = word.ActiveDocument.Fields.Add(
             Range=word.Selection.Range,
             Type=-1,
-            Text='STYLEREF "Heading 1" \\n',
+            Text='STYLEREF "标题 1" \\n',
             PreserveFormatting=False
         )
 
@@ -80,7 +81,7 @@ def get_chapter_number(para, word) -> int:
         temp_field.Delete()
         original_range.Select()
 
-        if chapter_text and ('Error' in chapter_text):
+        if chapter_text and ('错误' in chapter_text or 'Error' in chapter_text):
             return 0
 
         if chapter_text:
@@ -103,7 +104,7 @@ def check_multilevel_list_configured(doc, word) -> bool:
         temp_field = word.ActiveDocument.Fields.Add(
             Range=word.Selection.Range,
             Type=-1,
-            Text='STYLEREF "Heading 1" \\n',
+            Text='STYLEREF "标题 1" \\n',
             PreserveFormatting=False
         )
 
@@ -113,7 +114,7 @@ def check_multilevel_list_configured(doc, word) -> bool:
         original_range.Select()
 
         if chapter_text:
-            if 'Error' in chapter_text:
+            if '错误' in chapter_text or 'Error' in chapter_text:
                 pass
             else:
                 try:
@@ -125,7 +126,7 @@ def check_multilevel_list_configured(doc, word) -> bool:
         for para in doc.Paragraphs:
             try:
                 style_name = para.Style.NameLocal
-                if "Heading 1" in style_name:
+                if "标题 1" in style_name or "Heading 1" in style_name:
                     if para.Range.ListFormat.ListValue > 0:
                         return True
             except:
@@ -172,7 +173,7 @@ def extract_eqarr_template(template_path: str) -> dict:
     # Extract number
     number_match = re.search(r'<m:t>(\d+)</m:t>', omath_template)
     if not number_match:
-        raise ValueError("Formula number not found in template")
+        raise ValueError("Number not found in template")
 
     original_number = number_match.group(1)
 
@@ -191,6 +192,54 @@ def extract_eqarr_template(template_path: str) -> dict:
     }
 
 
+def extract_formula_omml(omath_content: str) -> str:
+    """
+    Extract complete OMML structure from oMathPara content before # delimiter
+
+    Returns the formula elements inside m:oMath, preserving all structure
+    like m:sSup, m:sSub, m:f, etc. Does not include outer m:oMathPara/m:oMath tags.
+
+    Args:
+        omath_content: oMathPara content containing formula with # delimiter
+
+    Returns:
+        str: Formula elements (m:r, m:sSup, etc.) without outer wrappers
+    """
+    # First, extract content inside <m:oMath>...</m:oMath>
+    omath_match = re.search(r'<m:oMath>(.*?)</m:oMath>', omath_content, re.DOTALL)
+    if not omath_match:
+        omath_inner = omath_content
+    else:
+        omath_inner = omath_match.group(1)
+
+    # Find # delimiter position
+    hash_pos = omath_inner.find('#')
+    if hash_pos == -1:
+        return omath_inner.strip()
+
+    # Find the last </m:t> before #
+    before_hash = omath_inner[:hash_pos]
+    last_close_pos = before_hash.rfind('</m:t>')
+    if last_close_pos == -1:
+        return before_hash
+
+    # Extract up to and including the last </m:t>
+    partial_xml = omath_inner[:last_close_pos + 6]
+
+    # Close any open tags to ensure balanced XML
+    # Order matters: close innermost tags first
+    tags_to_check = ['m:r', 'm:sup', 'm:sSup', 'm:sSub', 'm:e', 'm:d', 'm:f', 'm:num', 'm:den', 'm:rad']
+
+    close_tags = []
+    for tag in tags_to_check:
+        open_count = len(re.findall(rf'<{tag}(?:\s[^>]*)?>', partial_xml))
+        close_count = len(re.findall(rf'</{tag}>', partial_xml))
+        for _ in range(open_count - close_count):
+            close_tags.append(f'</{tag}>')
+
+    return partial_xml.strip() + ''.join(close_tags)
+
+
 def create_eqarr_formula(template: dict, formula_omml: str, number: str) -> str:
     """
     Create eqArr format formula using template with preserved OMML structure
@@ -203,7 +252,6 @@ def create_eqarr_formula(template: dict, formula_omml: str, number: str) -> str:
     Returns:
         str: eqArr format oMathPara XML
     """
-    # Start with eqarr template
     eqarr_xml = template['eqarr']
 
     # Template structure:
@@ -216,19 +264,9 @@ def create_eqarr_formula(template: dict, formula_omml: str, number: str) -> str:
     #   </m:e>
     # </m:eqArr>
 
-    # formula_omml structure (extracted from numbered formula):
-    # <m:r><m:t>E = m</m:t></m:r><m:sSup>...</m:sSup>
-    # (multiple m:r and other elements possible)
-
-    # Strategy:
-    # 1. Find the <m:d> element (number delimiter) - keep it as-is but update number
-    # 2. Find all content before <m:d> inside <m:e> - this is the formula area to replace
-    # 3. Replace formula area with formula_omml + <m:r><m:t>#</m:t></m:r>
-
-    # Find the <m:d> element
+    # Find the <m:d> element (number delimiter)
     d_match = re.search(r'<m:d>.*?</m:d>', eqarr_xml, re.DOTALL)
     if not d_match:
-        # Fallback: just replace number
         eqarr_xml = re.sub(r'<m:t>\d+</m:t>', f'<m:t>{number}</m:t>', eqarr_xml, count=1)
         return f'<m:oMathPara><m:oMath>{eqarr_xml}</m:oMath></m:oMathPara>'
 
@@ -236,24 +274,15 @@ def create_eqarr_formula(template: dict, formula_omml: str, number: str) -> str:
     d_end = d_match.end()
     d_element = d_match.group(0)
 
-    # Content before <m:d> is the formula area
     before_d = eqarr_xml[:d_start]
     after_d = eqarr_xml[d_end:]
-
-    # In before_d, find the <m:e> start tag
-    # The structure is: <m:eqArr>...<m:e>...formula...</m:e>...<m:d>
-    # But wait, <m:d> is INSIDE <m:e>, so before_d contains: <m:eqArr>...<m:e>...formula...
 
     # Find the last <m:e> in before_d
     e_start = before_d.rfind('<m:e>')
     if e_start == -1:
-        # Fallback
         return f'<m:oMathPara><m:oMath>{eqarr_xml}</m:oMath></m:oMathPara>'
 
-    # Find the end of <m:e> start tag
     e_tag_end = before_d.find('>', e_start) + 1
-
-    # Content before <m:e> tag (including the tag itself)
     before_e_content = before_d[:e_tag_end]
 
     # Build new formula content: formula_omml + # marker
@@ -271,80 +300,17 @@ def create_eqarr_formula(template: dict, formula_omml: str, number: str) -> str:
     return omath_para
 
 
-def extract_formula_omml(omath_content: str) -> str:
-    """
-    Extract complete OMML structure from oMathPara content before # delimiter
-
-    Returns the formula elements inside m:oMath, preserving all structure
-    like m:sSup, m:sSub, m:f, etc. Does not include outer m:oMathPara/m:oMath tags.
-
-    Args:
-        omath_content: oMathPara content containing formula with # delimiter
-
-    Returns:
-        str: Formula elements (m:r, m:sSup, etc.) without outer wrappers
-    """
-    # First, extract content inside <m:oMath>...</m:oMath>
-    omath_match = re.search(r'<m:oMath>(.*?)</m:oMath>', omath_content, re.DOTALL)
-    if not omath_match:
-        # Fallback: use content as-is
-        omath_inner = omath_content
-    else:
-        omath_inner = omath_match.group(1)
-
-    # Find # delimiter position
-    hash_pos = omath_inner.find('#')
-    if hash_pos == -1:
-        # No # found, return inner content as-is
-        return omath_inner.strip()
-
-    # Strategy: Find all XML elements before # and ensure they are properly closed
-    # We need to count open and close tags to ensure balanced XML
-
-    # Find the last </m:t> before #
-    before_hash = omath_inner[:hash_pos]
-    last_close_pos = before_hash.rfind('</m:t>')
-    if last_close_pos == -1:
-        # Fallback: just return everything before #
-        return before_hash
-
-    # Extract up to and including the last </m:t>
-    partial_xml = omath_inner[:last_close_pos + 6]  # +6 for '</m:t>'
-
-    # Now we need to close any open tags
-    # Count open vs close tags for m:r, m:sup, m:sSup, m:sSub, m:e, etc.
-    # Order matters: we need to close innermost tags first
-    # The partial_xml ends with </m:t>, so we need to close tags in the order they were opened
-    # e.g., if we have <m:sSup><m:e><m:r><m:t>2</m:t>, we need to close </m:r></m:e></m:sSup>
-    tags_to_check = ['m:r', 'm:sup', 'm:sSup', 'm:sSub', 'm:e', 'm:d', 'm:f', 'm:num', 'm:den', 'm:rad']
-
-    # Simple approach: count occurrences
-    close_tags = []
-    for tag in tags_to_check:  # Forward order: m:r first, then m:sup, then m:sSup
-        open_count = len(re.findall(rf'<{tag}(?:\s[^>]*)?>', partial_xml))
-        close_count = len(re.findall(rf'</{tag}>', partial_xml))
-        # Add missing close tags
-        for _ in range(open_count - close_count):
-            close_tags.append(f'</{tag}>')
-
-    # Append close tags
-    return partial_xml.strip() + ''.join(close_tags)
-
-
 def extract_formula_text(omath_content: str) -> str:
     """
     Extract plain text formula from oMath content
 
     Concatenate all <m:t> element contents until # delimiter
     """
-    # Find all m:t elements
     texts = re.findall(r'<m:t[^>]*>([^<]*)</m:t>', omath_content)
 
-    # Concatenate text until #
     result = []
     for t in texts:
         if '#' in t:
-            # Found #, extract content before it
             idx = t.index('#')
             result.append(t[:idx])
             break
@@ -374,7 +340,6 @@ def extract_formula_number(omath_content: str, simple_mode: bool = False) -> str
         chapter = bookmark_match.group(1)
         num = bookmark_match.group(2)
     else:
-        # Try simple mode bookmark: eq{num}
         bookmark_simple_match = re.search(r'w:name="eq(\d+)"', omath_content)
         if bookmark_simple_match:
             num = bookmark_simple_match.group(1)
@@ -382,14 +347,11 @@ def extract_formula_number(omath_content: str, simple_mode: bool = False) -> str
 
     # If bookmark not found, try to extract from SEQ field
     if num is None:
-        # Find chapter number in SEQ field: SEQ \\* ARABIC \\s N
-        seq_chapter_match = re.search(r'SEQ\s+\\*\s*ARABIC\s+\\s\s+(\d+)', omath_content)
+        seq_chapter_match = re.search(r'SEQ\s+式\s+\\*\s*ARABIC\s+\\s\s+(\d+)', omath_content)
         if seq_chapter_match:
             chapter = seq_chapter_match.group(1)
 
-        # Find sequence number in field result
-        # Find first number after SEQ field
-        seq_match = re.search(r'SEQ\s+\\*\s*ARABIC', omath_content)
+        seq_match = re.search(r'SEQ\s+式\s+\\*\s*ARABIC', omath_content)
         if seq_match:
             seq_end = seq_match.end()
             after_seq = omath_content[seq_end:seq_end+200]
@@ -397,11 +359,9 @@ def extract_formula_number(omath_content: str, simple_mode: bool = False) -> str
             if num_match:
                 num = num_match.group(1)
 
-    # If still not found, return None
     if num is None:
         return None
 
-    # Return number based on mode
     if simple_mode or chapter is None:
         return num
     else:
@@ -412,22 +372,16 @@ def convert_formula_in_xml(xml_content: str, template: dict, simple_mode: bool =
     """
     Convert formulas in XML from standard format to eqArr format
 
-    Standard format: <m:r><m:t>formula#</m:t></m:r>...field...<m:r><m:t>)</m:t></m:r>
-    eqArr format: <m:eqArr>...</m:eqArr>
-
     Args:
         xml_content: XML content
         template: Template dictionary
         simple_mode: Simple mode (no chapter numbers)
     """
-
-    # Find all oMathPara elements
     omath_paras = re.findall(r'(<m:oMathPara>.*?</m:oMathPara>)', xml_content, re.DOTALL)
 
     print(f"Found {len(omath_paras)} oMathPara element(s)")
 
     for i, para in enumerate(omath_paras):
-        # Check if already contains eqArr
         if '<m:eqArr>' in para:
             print(f"  oMathPara {i}: Already contains eqArr, skipping")
             continue
@@ -475,25 +429,20 @@ def postprocess_eqarr_format(docx_path: str, template_path: str, output_path: st
         output_path = docx_path
 
     try:
-        # Extract template
         template = extract_eqarr_template(template_path)
         print(f"Template extracted: Formula='{template['original_formula']}', Number='{template['original_number']}'")
 
-        # Read document XML
         with zipfile.ZipFile(docx_path, 'r') as zip_ref:
             xml_content = zip_ref.read('word/document.xml').decode('utf-8')
 
-        # Convert formulas
         print("Converting formula format...")
         new_xml = convert_formula_in_xml(xml_content, template, simple_mode)
 
-        # Check if conversion occurred
         if new_xml == xml_content:
             print("Warning: No formulas detected for conversion")
         else:
             print("Formula format conversion completed")
 
-        # Write to output file
         with zipfile.ZipFile(output_path, 'w') as zip_out:
             for item in zipfile.ZipFile(docx_path, 'r').infolist():
                 if item.filename == 'word/document.xml':
@@ -501,7 +450,6 @@ def postprocess_eqarr_format(docx_path: str, template_path: str, output_path: st
                 else:
                     zip_out.writestr(item, zipfile.ZipFile(docx_path, 'r').read(item.filename))
 
-        # Verify
         with zipfile.ZipFile(output_path, 'r') as zip_ref:
             new_xml_check = zip_ref.read('word/document.xml').decode('utf-8')
             has_eqarr = '<m:eqArr>' in new_xml_check
@@ -551,7 +499,7 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
                 raise ValueError(
                     'Document not configured for multi-level list!\n\n'
                     'Solution:\n'
-                    '1. Apply "Heading 1" style to chapter headings\n'
+                    '1. Apply "标题 1" style to chapter headings\n'
                     '2. Apply numbering via Home > Paragraph > Multilevel List\n'
                     '3. Re-run this script\n\n'
                     'Or use --simple parameter to skip chapter number check'
@@ -570,7 +518,7 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
             is_heading = False
             try:
                 style_name = para.Style.NameLocal
-                if "Heading 1" in style_name:
+                if "标题 1" in style_name or "Heading 1" in style_name:
                     is_heading = True
             except:
                 pass
@@ -597,7 +545,7 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
             raise ValueError(
                 'Document not configured for multi-level list!\n\n'
                 'Solution:\n'
-                '1. Apply "Heading 1" style to chapter headings\n'
+                '1. Apply "标题 1" style to chapter headings\n'
                 '2. Apply numbering via Home > Paragraph > Multilevel List\n'
                 '3. Re-run this script\n\n'
                 'Or use --simple parameter to skip chapter number check'
@@ -625,7 +573,7 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
                 word.Selection.Collapse(0)
 
                 if simple_mode:
-                    field_code = 'SEQ Equation \\* ARABIC'
+                    field_code = 'SEQ 式 \\* ARABIC'
                     field = doc.Fields.Add(
                         Range=word.Selection.Range,
                         Type=-1,
@@ -638,7 +586,7 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
                     field1 = doc.Fields.Add(
                         Range=word.Selection.Range,
                         Type=-1,
-                        Text='STYLEREF "Heading 1" \\n',
+                        Text='STYLEREF "标题 1" \\n',
                         PreserveFormatting=False
                     )
                     field1.Select()
@@ -647,7 +595,7 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
                     word.Selection.TypeText('-')
                     word.Selection.Collapse(0)
 
-                    field_code = f'SEQ Equation \\* ARABIC \\s {chap}'
+                    field_code = f'SEQ 式 \\* ARABIC \\s {chap}'
                     field2 = doc.Fields.Add(
                         Range=word.Selection.Range,
                         Type=-1,
@@ -688,7 +636,6 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
                 print("Using standard format")
                 use_eqarr = False
             else:
-                # Save to temp file
                 temp_dir = tempfile.mkdtemp()
                 temp_file = os.path.join(temp_dir, "temp_numbered.docx")
                 doc.SaveAs2(temp_file)
@@ -697,7 +644,6 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
                 print(f"\nConverting to eqArr format...")
                 if postprocess_eqarr_format(temp_file, str(template_path), str(output_path), simple_mode):
                     print(f"eqArr format conversion completed: {output_path}")
-                    # Clean up temp files
                     try:
                         os.remove(temp_file)
                         os.rmdir(temp_dir)
@@ -706,7 +652,6 @@ def add_formula_numbering(doc_path: str, output_path: str = None, simple_mode: b
                     return 0
                 else:
                     print("eqArr conversion failed, using standard format")
-                    # Fallback to standard format
                     doc = word.Documents.Open(temp_file)
                     try:
                         os.remove(temp_file)
@@ -778,14 +723,14 @@ Format Description:
 
 Prerequisites:
   In default mode, document must have multi-level list configured:
-  1. Chapter headings use "Heading 1" style
+  1. Chapter headings use "标题 1" style
   2. Apply numbering via Home > Paragraph > Multilevel List
   3. Heading style linked to list level
         '''
     )
 
     parser.add_argument('input', help='Input docx file path')
-    parser.add_argument('output', nargs='?', default=None, help='Output docx file path (optional, overwrites input by default)')
+    parser.add_argument('output', nargs='?', default=None, help='Output docx file path (optional, overrides input by default)')
     parser.add_argument('--simple', action='store_true', help='Use simple sequential numbering mode (no chapter numbers)')
     parser.add_argument('--t1', action='store_true', help='Use t1 format (eqArr environment, requires t1.docx template)')
 
@@ -807,5 +752,4 @@ Prerequisites:
 
 
 if __name__ == '__main__':
-    import sys
     sys.exit(main())
